@@ -30,13 +30,16 @@
       <div class="flex">
         <p class="font-mono text-fg" style="font-size: 0.8rem">{{ currentTimePretty }}</p>
         <div class="flex-grow" />
-        <p class="font-mono text-fg" style="font-size: 0.8rem">{{ totalTimeRemainingPretty }}</p>
+        <p class="font-mono text-fg whitespace-nowrap" style="font-size: 0.8rem">
+          {{ totalTimeRemainingPretty }}<span v-if="isSpeedAdjusted" class="text-fg-muted" style="font-size: 0.7rem"> ({{ totalTimeRemainingRealPretty }})</span>
+        </p>
       </div>
       <div class="w-full">
         <div class="h-1 w-full bg-track/50 relative rounded-full overflow-hidden">
           <div ref="totalReadyTrack" class="h-full bg-track-buffered absolute top-0 left-0 pointer-events-none rounded-full" />
           <div ref="totalBufferedTrack" class="h-full bg-track absolute top-0 left-0 pointer-events-none rounded-full" />
           <div ref="totalPlayedTrack" class="h-full bg-track-cursor absolute top-0 left-0 pointer-events-none rounded-full" />
+          <div v-for="(style, i) in totalSessionMarkerStyles" :key="`total-session-${i}`" class="h-full absolute top-0 bg-yellow-400 pointer-events-none" :style="style" />
         </div>
       </div>
     </div>
@@ -58,7 +61,9 @@
       <div ref="titlewrapper" class="overflow-hidden relative">
         <p class="title-text whitespace-nowrap"></p>
       </div>
-      <p class="author-text text-fg text-opacity-75 truncate">{{ authorName }}</p>
+      <p class="author-text text-fg text-opacity-75 truncate">
+        <span v-if="sleepTimerRunning && !showFullscreen" class="text-success mr-1"><span class="material-symbols align-middle" style="font-size: 0.9em">bedtime</span>{{ sleepTimeRemainingPretty }}</span>{{ authorName }}
+      </p>
     </div>
 
     <div id="playerContent" class="playerContainer w-full z-20 absolute bottom-0 left-0 right-0 p-2 pointer-events-auto transition-all" :style="{ backgroundColor: showFullscreen ? '' : coverRgb }" @click="clickContainer">
@@ -69,12 +74,21 @@
           <!-- hidden for podcasts but still using this as a placeholder -->
           <span v-else class="material-symbols text-3xl text-white text-opacity-0">bookmark</span>
 
-          <span class="font-mono text-fg-muted cursor-pointer" style="font-size: 1.35rem" @click="$emit('selectPlaybackSpeed')">{{ currentPlaybackRate }}x</span>
-          <svg v-if="!sleepTimerRunning" xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 text-fg-muted cursor-pointer" fill="none" viewBox="0 0 24 24" stroke="currentColor" @click.stop="$emit('showSleepTimer')">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-          </svg>
-          <div v-else class="h-7 w-7 flex items-center justify-around cursor-pointer" @click.stop="$emit('showSleepTimer')">
-            <p class="text-xl font-mono text-success">{{ sleepTimeRemainingPretty }}</p>
+          <div class="flex flex-col items-center cursor-pointer" @click="$emit('selectPlaybackSpeed')">
+            <span class="font-mono text-fg-muted leading-7" style="font-size: 1.35rem">{{ currentPlaybackRate }}x</span>
+            <span class="text-fg-muted text-[10px] uppercase tracking-wider">{{ $strings.LabelSpeed }}</span>
+          </div>
+          <div class="flex flex-col items-center cursor-pointer" @click.stop="$emit('showSleepTimer')">
+            <svg v-if="!sleepTimerRunning" xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+            <p v-else class="h-7 text-xl font-mono text-success leading-7">{{ sleepTimeRemainingPretty }}</p>
+            <span class="text-[10px] uppercase tracking-wider" :class="sleepTimerRunning ? 'text-success' : 'text-fg-muted'">{{ $strings.LabelSleep }}</span>
+          </div>
+
+          <div class="flex flex-col items-center cursor-pointer" @click.stop="showSessionsModal = true">
+            <span class="material-symbols text-3xl text-fg-muted leading-7">history</span>
+            <span class="text-fg-muted text-[10px] uppercase tracking-wider">{{ $strings.LabelSessions }}</span>
           </div>
 
           <span class="material-symbols text-3xl text-fg cursor-pointer" :class="chapters.length ? 'text-opacity-75' : 'text-opacity-10'" @click="clickChaptersBtn">format_list_bulleted</span>
@@ -106,17 +120,39 @@
 
       <!-- Chapter progress bar -->
       <div id="playerTrack" class="absolute left-0 w-full px-6">
+        <!-- Scrub bubble - target time, delta and scrub speed while dragging the cursor -->
+        <div v-if="isDraggingCursor" class="absolute left-0 right-0 bottom-full mb-3 flex justify-center pointer-events-none z-50">
+          <div class="bg-primary/95 border border-border rounded-lg px-4 py-2 text-center shadow-lg">
+            <p class="font-mono text-2xl text-fg">{{ $secondsToTimestamp(draggingCurrentTime) }}</p>
+            <p class="font-mono text-sm" :class="draggingCurrentTime >= draggingTouchStartTime ? 'text-success' : 'text-warning'">{{ scrubDeltaPretty }}</p>
+            <p class="text-[10px] uppercase tracking-wider text-fg-muted">{{ scrubSpeedLabel }}</p>
+          </div>
+        </div>
         <div class="flex pointer-events-none">
           <p class="font-mono text-fg" style="font-size: 0.8rem" ref="currentTimestamp">0:00</p>
           <div class="flex-grow" />
-          <p class="font-mono text-fg" style="font-size: 0.8rem">{{ timeRemainingPretty }}</p>
+          <p class="font-mono text-fg whitespace-nowrap" :class="{ 'pointer-events-auto cursor-pointer': showFullscreen && canToggleRemainingMode }" style="font-size: 0.8rem" @click.stop="toggleRemainingTimeMode">
+            {{ timeRemainingPretty }}<span v-if="isSpeedAdjusted" class="text-fg-muted" style="font-size: 0.7rem"> ({{ timeRemainingRealPretty }})</span>
+          </p>
         </div>
         <div ref="track" class="h-1.5 w-full bg-track/50 relative rounded-full overflow-hidden" :class="{ 'animate-pulse': showLoadingState }" @click.stop>
           <div ref="readyTrack" class="h-full bg-track-buffered absolute top-0 left-0 rounded-full pointer-events-none" />
           <div ref="bufferedTrack" class="h-full bg-track absolute top-0 left-0 rounded-full pointer-events-none" />
           <div ref="playedTrack" class="h-full bg-track-cursor absolute top-0 left-0 rounded-full pointer-events-none" />
+          <div v-for="(style, i) in sessionMarkerStyles" :key="`session-${i}`" class="h-full absolute top-0 bg-yellow-400 pointer-events-none" :style="style" />
           <div ref="trackCursor" class="h-7 w-7 rounded-full absolute pointer-events-auto flex items-center justify-center" :style="{ top: '-11px' }" :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }" @touchstart="touchstartCursor">
             <div class="bg-track-cursor rounded-full w-3.5 h-3.5 pointer-events-none" />
+          </div>
+        </div>
+        <!-- Book / Chapter scale toggle for the progress bar, and remaining time mode caption -->
+        <div v-if="showFullscreen && chapters.length" class="flex items-center mt-1.5">
+          <div class="flex-1" />
+          <div class="flex rounded-full border border-fg/20 overflow-hidden text-[10px] uppercase tracking-wider pointer-events-auto">
+            <button class="px-2.5 py-0.5" :class="!playerSettings.useChapterTrack ? 'bg-fg/20 text-fg' : 'text-fg-muted'" @click.stop="setUseChapterTrack(false)">{{ $strings.LabelBook }}</button>
+            <button class="px-2.5 py-0.5" :class="playerSettings.useChapterTrack ? 'bg-fg/20 text-fg' : 'text-fg-muted'" @click.stop="setUseChapterTrack(true)">{{ $strings.LabelChapter }}</button>
+          </div>
+          <div class="flex-1 text-right">
+            <span class="text-[10px] uppercase tracking-wider text-fg-muted pointer-events-auto" @click.stop="toggleRemainingTimeMode">{{ remainingTimeIsChapter ? $strings.LabelChapterLeft : $strings.LabelBookLeft }}</span>
           </div>
         </div>
       </div>
@@ -124,6 +160,8 @@
 
     <!-- Chapters modal - lists chapters for navigation -->
     <modals-chapters-modal v-model="showChapterModal" :current-chapter="currentChapter" :chapters="chapters" :playback-rate="currentPlaybackRate" @select="selectChapter" />
+    <!-- Listening sessions modal - where each play/pause session started and ended -->
+    <modals-listening-sessions-modal v-model="showSessionsModal" :sessions="listeningSessions" @select="selectSessionTime" />
     <!-- More menu dialog - player settings and options -->
     <modals-dialog v-model="showMoreMenuDialog" :items="menuItems" width="80vw" @action="clickMenuAction" />
   </div>
@@ -136,6 +174,16 @@ import { Dialog } from '@capacitor/dialog'
 import { getAverageColorFromCoverUrl } from '@/utils/coverAverageColor'
 import WrappingMarquee from '@/assets/WrappingMarquee.js'
 import jumpLabelMixin from '@/mixins/jumpLabel'
+import { getListeningSessions } from '@/utils/listeningSessions'
+
+// Variable-speed scrubbing: move finger vertically away from the track to scrub slower
+const SCRUB_TIERS = [
+  { minDistance: 0, factor: 1, label: 'LabelHiSpeedScrubbing' },
+  { minDistance: 60, factor: 0.5, label: 'LabelHalfSpeedScrubbing' },
+  { minDistance: 140, factor: 0.25, label: 'LabelQuarterSpeedScrubbing' },
+  { minDistance: 220, factor: 0.125, label: 'LabelFineScrubbing' }
+]
+const MAX_SESSION_MARKERS = 5
 
 export default {
   props: {
@@ -173,8 +221,15 @@ export default {
         useChapterTrack: false,
         useTotalTrack: true,
         scaleElapsedTimeBySpeed: true,
-        lockUi: false
+        lockUi: false,
+        remainingTimeMode: 'total', // 'total' | 'chapter'
+        showSessionMarkers: true
       },
+      showSessionsModal: false,
+      mediaItemHistoryEvents: [],
+      scrubTierIndex: 0,
+      draggingLastX: 0,
+      draggingTrackY: 0,
       isLoading: false,
       isCheckingServerProgress: false,
       isDraggingCursor: false,
@@ -228,6 +283,16 @@ export default {
             text: this.$strings.LabelChapterTrack,
             value: 'chapter_track',
             icon: this.playerSettings.useChapterTrack ? 'check_box' : 'check_box_outline_blank'
+          },
+          {
+            text: this.$strings.LabelSessionMarkers,
+            value: 'session_markers',
+            icon: this.playerSettings.showSessionMarkers ? 'check_box' : 'check_box_outline_blank'
+          },
+          {
+            text: this.sleepTimerRunning ? `${this.$strings.HeaderSleepTimer} (${this.sleepTimeRemainingPretty})` : this.$strings.HeaderSleepTimer,
+            value: 'sleep_timer',
+            icon: 'bedtime'
           },
           {
             text: this.$strings.LabelScaleElapsedTimeBySpeed,
@@ -370,9 +435,53 @@ export default {
       }
       return this.$secondsToTimestamp(currentTimeToUse)
     },
+    isSpeedAdjusted() {
+      return this.currentPlaybackRate !== 1
+    },
+    canToggleRemainingMode() {
+      return this.chapters.length > 0
+    },
+    remainingTimeIsChapter() {
+      return this.playerSettings.remainingTimeMode === 'chapter' && !!this.currentChapter
+    },
+    timeRemainingRealPretty() {
+      return this.formatRemaining(this.timeRemaining * this.currentPlaybackRate)
+    },
+    totalTimeRemainingRealPretty() {
+      return this.formatRemaining(this.totalTimeRemaining * this.currentPlaybackRate)
+    },
+    scrubSpeedLabel() {
+      return this.$strings[SCRUB_TIERS[this.scrubTierIndex].label]
+    },
+    scrubDeltaPretty() {
+      const delta = this.draggingCurrentTime - this.draggingTouchStartTime
+      return (delta < 0 ? '-' : '+') + this.$secondsToTimestamp(Math.abs(delta))
+    },
+    historyMediaId() {
+      // Must match PlaybackSession.mediaItemId in native
+      const session = this.playbackSession
+      if (!session?.libraryItemId) return null
+      return session.episodeId ? `${session.libraryItemId}-${session.episodeId}` : session.libraryItemId
+    },
+    closedAndOpenSessions() {
+      return getListeningSessions(this.mediaItemHistoryEvents)
+    },
+    listeningSessions() {
+      // Extend the open session to the live player time
+      return this.closedAndOpenSessions.map((session) => (session.isOpen ? { ...session, endTime: this.currentTime } : session))
+    },
+    sessionMarkerStyles() {
+      if (this.playerSettings.useChapterTrack && this.currentChapter) {
+        return this.getSessionMarkerStyles(this.currentChapter.start, this.currentChapter.end)
+      }
+      return this.getSessionMarkerStyles(0, this.totalDuration)
+    },
+    totalSessionMarkerStyles() {
+      return this.getSessionMarkerStyles(0, this.totalDuration)
+    },
     timeRemaining() {
       let currentTimeToUse = this.isDraggingCursor ? this.draggingCurrentTime : this.currentTime
-      if (this.playerSettings.useChapterTrack && this.currentChapter) {
+      if (this.remainingTimeIsChapter) {
         var currChapTime = currentTimeToUse - this.currentChapter.start
         return (this.currentChapterDuration - currChapTime) / this.currentPlaybackRate
       }
@@ -659,6 +768,9 @@ export default {
       this.draggingTouchStartX = e.touches[0].pageX
       this.draggingTouchStartTime = this.currentTime
       this.draggingCurrentTime = this.currentTime
+      this.draggingLastX = e.touches[0].clientX
+      this.draggingTrackY = this.$refs.track.getBoundingClientRect().top
+      this.scrubTierIndex = 0
       this.updateTrack()
     },
     async playPauseClick() {
@@ -744,7 +856,20 @@ export default {
     touchmove(e) {
       if (!this.isDraggingCursor || !e.touches) return
 
-      const distanceMoved = e.touches[0].pageX - this.draggingTouchStartX
+      const touch = e.touches[0]
+      const verticalDistance = Math.abs(touch.clientY - this.draggingTrackY)
+      let tierIndex = 0
+      SCRUB_TIERS.forEach((tier, index) => {
+        if (verticalDistance >= tier.minDistance) tierIndex = index
+      })
+      if (tierIndex !== this.scrubTierIndex) {
+        this.scrubTierIndex = tierIndex
+        this.$hapticsImpact()
+      }
+
+      // Integrate movement so changing scrub speed mid-drag doesn't jump the cursor
+      const distanceMoved = touch.clientX - this.draggingLastX
+      this.draggingLastX = touch.clientX
       let duration = this.totalDuration
       let minTime = 0
       let maxTime = duration
@@ -756,7 +881,7 @@ export default {
 
       const trackWidth = this.$refs.track?.clientWidth || this.trackWidth
       const timePerPixel = duration / trackWidth
-      const newTime = this.draggingTouchStartTime + timePerPixel * distanceMoved
+      const newTime = this.draggingCurrentTime + timePerPixel * distanceMoved * SCRUB_TIERS[tierIndex].factor
       this.draggingCurrentTime = Math.min(maxTime, Math.max(minTime, newTime))
 
       this.updateTimestamp()
@@ -777,14 +902,12 @@ export default {
           this.playerSettings.lockUi = !this.playerSettings.lockUi
           this.savePlayerSettings()
         } else if (action === 'chapter_track') {
-          this.playerSettings.useChapterTrack = !this.playerSettings.useChapterTrack
-          this.playerSettings.useTotalTrack = !this.playerSettings.useChapterTrack || this.playerSettings.useTotalTrack
-
-          this.updateTimestamp()
-          this.updateTrack()
-          this.updateReadyTrack()
-          this.updateUseChapterTrack()
+          this.toggleUseChapterTrack()
+        } else if (action === 'session_markers') {
+          this.playerSettings.showSessionMarkers = !this.playerSettings.showSessionMarkers
           this.savePlayerSettings()
+        } else if (action === 'sleep_timer') {
+          this.$emit('showSleepTimer')
         } else if (action === 'total_track') {
           this.playerSettings.useTotalTrack = !this.playerSettings.useTotalTrack
           this.playerSettings.useChapterTrack = !this.playerSettings.useTotalTrack || this.playerSettings.useChapterTrack
@@ -798,6 +921,66 @@ export default {
           this.closePlayback()
         }
       })
+    },
+    toggleUseChapterTrack() {
+      this.playerSettings.useChapterTrack = !this.playerSettings.useChapterTrack
+      this.playerSettings.useTotalTrack = !this.playerSettings.useChapterTrack || this.playerSettings.useTotalTrack
+      // Remaining time follows the bar by default, tap the remaining time to override
+      this.playerSettings.remainingTimeMode = this.playerSettings.useChapterTrack ? 'chapter' : 'total'
+
+      this.updateTimestamp()
+      this.updateTrack()
+      this.updateReadyTrack()
+      this.updateUseChapterTrack()
+      this.savePlayerSettings()
+    },
+    async setUseChapterTrack(useChapterTrack) {
+      if (this.playerSettings.useChapterTrack === useChapterTrack) return
+      await this.$hapticsImpact()
+      this.toggleUseChapterTrack()
+    },
+    async toggleRemainingTimeMode() {
+      if (!this.canToggleRemainingMode) return
+      await this.$hapticsImpact()
+      this.playerSettings.remainingTimeMode = this.playerSettings.remainingTimeMode === 'chapter' ? 'total' : 'chapter'
+      this.savePlayerSettings()
+    },
+    formatRemaining(seconds) {
+      if (seconds < 0) return this.$secondsToTimestamp(seconds * -1)
+      return '-' + this.$secondsToTimestamp(seconds)
+    },
+    getSessionMarkerStyles(rangeStart, rangeEnd) {
+      const rangeDuration = rangeEnd - rangeStart
+      if (!this.playerSettings.showSessionMarkers || !this.showFullscreen || rangeDuration <= 0) return []
+
+      // Newest session most opaque
+      return this.listeningSessions.slice(0, MAX_SESSION_MARKERS).reduce((styles, session, index) => {
+        const start = Math.max(rangeStart, Math.min(session.startTime, session.endTime))
+        const end = Math.min(rangeEnd, Math.max(session.startTime, session.endTime))
+        if (end < start) return styles
+        styles.push({
+          left: ((start - rangeStart) / rangeDuration) * 100 + '%',
+          width: `max(2px, ${((end - start) / rangeDuration) * 100}%)`,
+          opacity: 0.55 - index * 0.09
+        })
+        return styles
+      }, [])
+    },
+    async selectSessionTime(time) {
+      await this.$hapticsImpact()
+      this.showSessionsModal = false
+      this.seek(time)
+    },
+    async loadMediaItemHistory() {
+      this.mediaItemHistoryEvents = []
+      // Media item history is only recorded on Android
+      if (this.$platform !== 'android' || !this.historyMediaId) return
+      const mediaItemHistory = await this.$db.getMediaItemHistory(this.historyMediaId)
+      this.mediaItemHistoryEvents = mediaItemHistory?.events || []
+    },
+    onMediaItemHistoryUpdated(mediaItemHistory) {
+      if (!mediaItemHistory || mediaItemHistory.id !== this.historyMediaId) return
+      this.mediaItemHistoryEvents = mediaItemHistory.events || []
     },
     updateUseChapterTrack() {
       // Chapter track in NowPlaying only supported on iOS for now
@@ -820,6 +1003,8 @@ export default {
       this.isEnded = false
       this.isLoading = false
       this.playbackSession = null
+      this.mediaItemHistoryEvents = []
+      this.showSessionsModal = false
     },
     async loadPlayerSettings() {
       const savedPlayerSettings = await this.$localStore.getPlayerSettings()
@@ -840,6 +1025,9 @@ export default {
         this.playerSettings.useTotalTrack = !!savedPlayerSettings.useTotalTrack
         this.playerSettings.lockUi = !!savedPlayerSettings.lockUi
         this.playerSettings.scaleElapsedTimeBySpeed = !!savedPlayerSettings.scaleElapsedTimeBySpeed
+        // Added later - default remaining time to follow the track mode as before
+        this.playerSettings.remainingTimeMode = savedPlayerSettings.remainingTimeMode || (this.playerSettings.useChapterTrack ? 'chapter' : 'total')
+        this.playerSettings.showSessionMarkers = savedPlayerSettings.showSessionMarkers !== false
       }
     },
     savePlayerSettings() {
@@ -886,6 +1074,7 @@ export default {
       this.isLoading = true
       this.syncStatus = 0
       this.$store.commit('setPlaybackSession', this.playbackSession)
+      this.loadMediaItemHistory()
 
       // Set track width
       this.$nextTick(() => {
@@ -921,6 +1110,7 @@ export default {
       AbsAudioPlayer.addListener('onProgressSyncFailing', this.showProgressSyncIsFailing)
       AbsAudioPlayer.addListener('onProgressSyncSuccess', this.showProgressSyncSuccess)
       AbsAudioPlayer.addListener('onPlaybackSpeedChanged', this.onPlaybackSpeedChanged)
+      AbsAudioPlayer.addListener('onMediaItemHistoryUpdated', this.onMediaItemHistoryUpdated)
     },
     async screenOrientationChange() {
       if (this.isRefreshingUI) return

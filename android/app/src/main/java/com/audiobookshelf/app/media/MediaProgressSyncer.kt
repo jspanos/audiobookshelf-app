@@ -125,11 +125,22 @@ class MediaProgressSyncer(
     val currentTime =
             if (shouldSync == true) playerNotificationService.getCurrentTimeSeconds() else 0.0
     if (currentTime > 0) { // Current time should always be > 0 on stop
+      // Local sessions are saved to the device db synchronously inside sync(), so the caller
+      // (e.g. preparing the next downloaded item) does not need to wait on the server request,
+      // which can take the full http timeout when the server is unreachable.
+      val stoppedSession = currentPlaybackSession
+      val waitForServer = !currentIsLocal
       sync(true, currentTime) { syncResult ->
-        currentPlaybackSession?.let { playbackSession ->
+        stoppedSession?.let { playbackSession ->
           MediaEventManager.stopEvent(playbackSession, syncResult)
         }
 
+        if (waitForServer) {
+          reset()
+          cb()
+        }
+      }
+      if (!waitForServer) {
         reset()
         cb()
       }

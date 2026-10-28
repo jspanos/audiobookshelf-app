@@ -18,13 +18,13 @@
           </template>
         </ul>
         <div class="flex items-center justify-center py-3 border-t border-fg/10">
-          <button :disabled="!canDecrement" @click="decrement" class="icon-num-btn w-8 h-8 text-fg-muted rounded border border-border flex items-center justify-center">
+          <button :disabled="!canDecrement" @click="clickStep(decrement)" @touchstart="startRepeat(decrement)" @touchend="stopRepeat" @touchcancel="stopRepeat" class="icon-num-btn w-8 h-8 text-fg-muted rounded border border-border flex items-center justify-center">
             <span class="material-symbols">remove</span>
           </button>
           <div class="w-24 text-center">
             <p class="text-xl">{{ playbackRate }}<span class="text-lg">⨯</span></p>
           </div>
-          <button :disabled="!canIncrement" @click="increment" class="icon-num-btn w-8 h-8 text-fg-muted rounded border border-border flex items-center justify-center">
+          <button :disabled="!canIncrement" @click="clickStep(increment)" @touchstart="startRepeat(increment)" @touchend="stopRepeat" @touchcancel="stopRepeat" class="icon-num-btn w-8 h-8 text-fg-muted rounded border border-border flex items-center justify-center">
             <span class="material-symbols">add</span>
           </button>
         </div>
@@ -43,13 +43,19 @@ export default {
     return {
       currentPlaybackRate: 0,
       MIN_SPEED: 0.5,
-      MAX_SPEED: 10
+      MAX_SPEED: 10,
+      STEP: 0.05,
+      didRepeat: false,
+      repeatTimeout: null,
+      repeatInterval: null
     }
   },
   watch: {
     show(newVal) {
       if (newVal) {
         this.currentPlaybackRate = this.selected
+      } else {
+        this.stopRepeat()
       }
     }
   },
@@ -71,25 +77,50 @@ export default {
       }
     },
     rates() {
-      return [0.5, 1, 1.2, 1.5, 1.7, 2, 3]
+      return [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3]
     },
     canIncrement() {
-      return this.playbackRate + 0.1 <= this.MAX_SPEED
+      return Number((this.playbackRate + this.STEP).toFixed(2)) <= this.MAX_SPEED
     },
     canDecrement() {
-      return this.playbackRate - 0.1 >= this.MIN_SPEED
+      return Number((this.playbackRate - this.STEP).toFixed(2)) >= this.MIN_SPEED
     }
   },
   methods: {
     increment() {
-      if (this.selected + 0.1 > this.MAX_SPEED) return
-      var newPlaybackRate = this.selected + 0.1
-      this.selected = Number(newPlaybackRate.toFixed(1))
+      const newPlaybackRate = Number((this.selected + this.STEP).toFixed(2))
+      if (newPlaybackRate > this.MAX_SPEED) return
+      this.selected = newPlaybackRate
     },
     decrement() {
-      if (this.selected - 0.1 < this.MIN_SPEED) return
-      var newPlaybackRate = this.selected - 0.1
-      this.selected = Number(newPlaybackRate.toFixed(1))
+      const newPlaybackRate = Number((this.selected - this.STEP).toFixed(2))
+      if (newPlaybackRate < this.MIN_SPEED) return
+      this.selected = newPlaybackRate
+    },
+    clickStep(fn) {
+      // Click fires after a long-press release; the repeat already applied the steps
+      if (this.didRepeat) {
+        this.didRepeat = false
+        return
+      }
+      fn()
+    },
+    startRepeat(fn) {
+      // Holding +/- repeats the step after a short delay
+      this.stopRepeat()
+      this.didRepeat = false
+      this.repeatTimeout = setTimeout(() => {
+        this.repeatInterval = setInterval(() => {
+          this.didRepeat = true
+          fn()
+        }, 150)
+      }, 400)
+    },
+    stopRepeat() {
+      clearTimeout(this.repeatTimeout)
+      clearInterval(this.repeatInterval)
+      this.repeatTimeout = null
+      this.repeatInterval = null
     },
     modalInput(val) {
       if (!val) {
@@ -104,7 +135,10 @@ export default {
       this.$emit('change', Number(rate))
     }
   },
-  mounted() {}
+  mounted() {},
+  beforeDestroy() {
+    this.stopRepeat()
+  }
 }
 </script>
 

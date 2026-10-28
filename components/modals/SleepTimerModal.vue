@@ -82,7 +82,7 @@ export default {
       }
     },
     timeouts() {
-      return [5, 10, 15, 30, 45, 60, 90]
+      return [5, 10, 15, 20, 30, 45, 60, 90]
     },
     timeRemainingPretty() {
       if (this.currentTime <= 0) return '0:00'
